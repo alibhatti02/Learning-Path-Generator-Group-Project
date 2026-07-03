@@ -12,12 +12,19 @@ endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
 deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "")
 api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-05-01-preview")
 
-# Initialize the dedicated Azure OpenAI client wrapper
-client = AzureOpenAI(
-    azure_endpoint=endpoint.rstrip("/"),
-    api_key=api_key,
-    api_version=api_version
-)
+# Lazily initialize the Azure OpenAI client so the app can still boot (auth, health checks)
+# when Azure credentials are absent — the error surfaces on first AI call instead of at import.
+_client = None
+
+def get_azure_client() -> AzureOpenAI:
+    global _client
+    if _client is None:
+        _client = AzureOpenAI(
+            azure_endpoint=endpoint.rstrip("/"),
+            api_key=api_key,
+            api_version=api_version
+        )
+    return _client
 
 def generate_learning_roadmap(topic: str, hours_per_day: int, level: str) -> dict:
     """
@@ -58,7 +65,7 @@ def generate_learning_roadmap(topic: str, hours_per_day: int, level: str) -> dic
         )
         
         # Dispatch the request to your deployment
-        response = client.chat.completions.create(
+        response = get_azure_client().chat.completions.create(
             model=deployment_name,
             response_format={"type": "json_object"},
             messages=[

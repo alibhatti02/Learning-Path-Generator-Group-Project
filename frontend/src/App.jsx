@@ -12,12 +12,25 @@ import {
   X, 
   ArrowRight,
   RotateCcw,
-  Video // NEW: Imported Video icon to distinguish live YouTube streaming items
+  Video, // NEW: Imported Video icon to distinguish live YouTube streaming items
+  LogOut,
+  Lock
 } from 'lucide-react';
 
 const BACKEND_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
 
 export default function App() {
+  // =========================================================================
+  // NEW: Account session states — JWT persisted in localStorage
+  // =========================================================================
+  const [authToken, setAuthToken] = useState(() => localStorage.getItem('cf_token'));
+  const [userEmail, setUserEmail] = useState(() => localStorage.getItem('cf_email'));
+  const [authMode, setAuthMode] = useState('login'); // login | register
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+
   // Input Form States
   const [goal, setGoal] = useState('');
   const [experienceLevel, setExperienceLevel] = useState('beginner');
@@ -37,6 +50,55 @@ export default function App() {
   const [quizAnswers, setQuizAnswers] = useState({}); // { question_number: string }
   const [quizResult, setQuizResult] = useState(null);
 
+  // Action: Register or log in, then persist the session token
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthLoading(true);
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/auth/${authMode}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, password: authPassword })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Authentication failed. Check your details.');
+      localStorage.setItem('cf_token', data.access_token);
+      localStorage.setItem('cf_email', data.email);
+      setAuthToken(data.access_token);
+      setUserEmail(data.email);
+      setAuthPassword('');
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // Action: Clear the session and return to the login gate
+  const handleLogout = () => {
+    localStorage.removeItem('cf_token');
+    localStorage.removeItem('cf_email');
+    setAuthToken(null);
+    setUserEmail(null);
+    setRoadmapData(null);
+    setActiveQuiz(null);
+    setViewState('placeholder');
+  };
+
+  // Wrapper around fetch that attaches the JWT and logs out on expired/invalid sessions
+  const authFetch = async (url, options = {}) => {
+    const response = await fetch(url, {
+      ...options,
+      headers: { ...(options.headers || {}), Authorization: `Bearer ${authToken}` }
+    });
+    if (response.status === 401) {
+      handleLogout();
+      throw new Error('Your session expired — please log in again.');
+    }
+    return response;
+  };
+
   // Action: Trigger Dynamic AI Roadmap Generation
   const handleGeneratePath = async (e) => {
     e.preventDefault();
@@ -48,7 +110,7 @@ export default function App() {
       // CHANGED: Endpoint matched to production API path `/api/generate` 
       // CHANGED: Parameters updated to pass `hours_per_day` instead of `weekly_hours`
       // =========================================================================
-      const response = await fetch(`${BACKEND_URL}/api/generate`, {
+      const response = await authFetch(`${BACKEND_URL}/api/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -75,7 +137,7 @@ export default function App() {
     setViewState('loading');
 
     try {
-      const response = await fetch(`${BACKEND_URL}/api/quiz/generate`, {
+      const response = await authFetch(`${BACKEND_URL}/api/quiz/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ milestone, week_number: weekNum })
@@ -103,7 +165,7 @@ export default function App() {
     }));
 
     try {
-      const response = await fetch(`${BACKEND_URL}/api/quiz/submit`, {
+      const response = await authFetch(`${BACKEND_URL}/api/quiz/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -122,9 +184,79 @@ export default function App() {
     }
   };
 
+  // =========================================================================
+  // NEW: Account gate — unauthenticated visitors see the login/register card
+  // =========================================================================
+  if (!authToken) {
+    return (
+      <div className="bg-[#F5F5F7] text-[#1D1D1F] min-h-screen flex items-center justify-center font-sans p-4">
+        <div className="bg-white border border-[#E5E5EA] rounded-2xl p-8 w-full max-w-sm shadow-[0_4px_24px_rgba(0,0,0,0.04)] space-y-6">
+          <div className="text-center space-y-2">
+            <div className="bg-neutral-900 text-white p-2.5 rounded-xl inline-flex">
+              <Layers size={22} className="stroke-[2.2]" />
+            </div>
+            <h1 className="text-lg font-semibold tracking-tight">PathCraft</h1>
+            <p className="text-xs text-[#86868B] font-medium">
+              {authMode === 'login' ? 'Sign in to access your learning paths' : 'Create an account to get started'}
+            </p>
+          </div>
+
+          <form onSubmit={handleAuthSubmit} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-[#86868B] mb-2">EMAIL</label>
+              <input
+                type="email"
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                required
+                placeholder="you@example.com"
+                className="w-full p-3 bg-[#F5F5F7] border border-transparent rounded-xl focus:outline-hidden focus:border-blue-500 focus:bg-white text-sm transition-all font-medium placeholder-[#86868B]/70"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-[#86868B] mb-2">PASSWORD</label>
+              <input
+                type="password"
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                required
+                minLength={8}
+                placeholder="Minimum 8 characters"
+                className="w-full p-3 bg-[#F5F5F7] border border-transparent rounded-xl focus:outline-hidden focus:border-blue-500 focus:bg-white text-sm transition-all font-medium placeholder-[#86868B]/70"
+              />
+            </div>
+
+            {authError && (
+              <p className="text-xs text-rose-600 font-medium bg-rose-50/60 border border-rose-500/10 p-2.5 rounded-xl">{authError}</p>
+            )}
+
+            <button
+              type="submit"
+              disabled={authLoading}
+              className="w-full bg-neutral-900 hover:bg-neutral-800 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 text-sm"
+            >
+              <Lock size={14} /> {authLoading ? 'Please wait...' : authMode === 'login' ? 'Sign In' : 'Create Account'}
+            </button>
+          </form>
+
+          <p className="text-xs text-center text-[#86868B] font-medium">
+            {authMode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
+            <button
+              type="button"
+              onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setAuthError(''); }}
+              className="text-blue-600 font-semibold hover:underline cursor-pointer"
+            >
+              {authMode === 'login' ? 'Sign up' : 'Sign in'}
+            </button>
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-[#F5F5F7] text-[#1D1D1F] min-h-screen flex flex-col font-sans selection:bg-blue-500/20">
-      
+
       {/* Premium Apple-Style Glassmorphism Navbar */}
       <header className="sticky top-0 z-50 bg-white/70 backdrop-blur-md border-b border-[#D2D2D7]/30 px-6 py-4">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
@@ -137,9 +269,20 @@ export default function App() {
               <p className="text-[10px] text-[#86868B] font-medium tracking-wide uppercase">AI Systems</p>
             </div>
           </div>
-          <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 rounded-full border border-emerald-500/20">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span className="text-[11px] font-semibold text-emerald-700 tracking-wide">Live Connection</span>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 rounded-full border border-emerald-500/20">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className="text-[11px] font-semibold text-emerald-700 tracking-wide">Live Connection</span>
+            </div>
+            {/* NEW: Active session identity + logout control */}
+            <span className="text-[11px] font-medium text-[#86868B] hidden sm:inline truncate max-w-[160px]">{userEmail}</span>
+            <button
+              onClick={handleLogout}
+              title="Sign out"
+              className="text-[#86868B] hover:text-[#1D1D1F] p-1.5 bg-[#F5F5F7] hover:bg-[#E5E5EA] rounded-full transition-all cursor-pointer"
+            >
+              <LogOut size={14} />
+            </button>
           </div>
         </div>
       </header>

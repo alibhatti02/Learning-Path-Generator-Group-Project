@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from services.ai_service import generate_learning_roadmap
+from services.auth_service import get_current_user
 from services.resource_service import fetch_resources_for_query
 
 router = APIRouter(tags=["generation"])
@@ -14,7 +15,7 @@ class PathRequest(BaseModel):
     hours_per_day: int
 
 @router.post("/generate")
-def create_path(request: PathRequest):
+def create_path(request: PathRequest, user: dict = Depends(get_current_user)):
     """
     Processes incoming configuration values, calls the dynamic timeline service,
     injects live resources, and returns structured object data.

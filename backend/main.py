@@ -1,9 +1,34 @@
+from dotenv import load_dotenv
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routes.learning_path import router as learning_path_router
+from routes.auth import router as auth_router
+from routes.quiz import router as quiz_router
+from services.database import init_db
+
+# Load .env before anything reads the environment — don't rely on
+# services calling load_dotenv() as an import side effect
+load_dotenv()
 
 app = FastAPI(title="Course Forge Backend API", version="1.0")
+
+# Create the SQLite users table on boot if it doesn't exist yet
+init_db()
+
+REQUIRED_ENV_VARS = ["AZURE_OPENAI_API_KEY", "YOUTUBE_API_KEY", "JWT_SECRET"]
+
+def check_required_config():
+    missing = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
+    if missing:
+        print("\n" + "=" * 60)
+        print("⚠️ MISSING REQUIRED CONFIG - app will run degraded:")
+        for var in missing:
+            print(f"   • {var}")
+        print("     Copy .env.example to .env and fill these in.")
+        print("=" * 60 + "\n")
+
+check_required_config()
 
 # =========================================================================
 # Configure CORS Middleware so your React frontend can communicate safely
@@ -23,6 +48,8 @@ app.add_middleware(
 
 # Mount your learning path router to the app workspace, prepending "/api" to all its endpoints.
 app.include_router(learning_path_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
+app.include_router(quiz_router, prefix="/api")
 
 # Define a baseline GET endpoint at the absolute root URL to handle simple connectivity health checks.
 @app.get("/")

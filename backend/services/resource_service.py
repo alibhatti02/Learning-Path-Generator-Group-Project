@@ -15,8 +15,8 @@ def fetch_resources_for_query(query: str) -> list[dict]:
     and returns a clean, structured list of real video titles and URLs.
     """
     # Guard clause: Fail gracefully back to the router if no API key is provided
+    # (missing-key warning is handled once at startup in main.py)
     if not YOUTUBE_API_KEY:
-        print("⚠️ WARNING: YOUTUBE_API_KEY missing from environment variables.")
         return []
 
     # Configure the exact payload criteria Google's search engine expects
