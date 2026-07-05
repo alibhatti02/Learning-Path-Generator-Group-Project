@@ -1,23 +1,44 @@
-import React, { useState } from 'react';
-import { 
-  Sparkles, 
-  Layers, 
-  Clock, 
-  Calendar, 
-  BookOpen, 
-  Flag, 
-  HelpCircle, 
-  CheckCircle2, 
-  XCircle, 
-  X, 
+import React, { useState, useEffect } from 'react';
+import {
+  Sparkles,
+  Layers,
+  Clock,
+  Calendar,
+  BookOpen,
+  Flag,
+  CheckCircle2,
+  XCircle,
+  X,
   ArrowRight,
   RotateCcw,
   Video, // NEW: Imported Video icon to distinguish live YouTube streaming items
   LogOut,
-  Lock
+  Lock,
+  Download,
+  FileText,
+  Upload,
+  ScanSearch,
+  History,
+  Plus,
+  Trash2
 } from 'lucide-react';
+import LoadingScreen from './components/LoadingScreen';
+import CareerReport from './components/CareerReport';
+import { downloadRoadmapMarkdown, printRoadmapPdf } from './utils/roadmapExport';
 
 const BACKEND_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+
+// Step scripts for the animated loading page — one per long-running action
+const ROADMAP_STEPS = [
+  'Gauging topic complexity',
+  'Calculating your optimal timeline',
+  'Structuring weekly milestones',
+  'Sourcing live video resources',
+  'Polishing the blueprint',
+];
+const QUIZ_STEPS = ['Reviewing the milestone', 'Writing challenge questions', 'Calibrating difficulty'];
+const GRADE_STEPS = ['Checking your answers', 'Writing per-question feedback', 'Scoring the assessment'];
+const RESUME_STEPS = ['Parsing your resume', 'Running the ATS scan', 'Drafting enhancements', 'Matching job roles'];
 
 export default function App() {
   // =========================================================================
@@ -34,21 +55,88 @@ export default function App() {
   // Input Form States
   const [goal, setGoal] = useState('');
   const [experienceLevel, setExperienceLevel] = useState('beginner');
-  
+
   // =========================================================================
   // CHANGED: Tracking "Hours Per Day" intervals to align with backend service contracts
   // =========================================================================
-  const [hoursPerDay, setHoursPerDay] = useState(2); 
-  
+  const [hoursPerDay, setHoursPerDay] = useState(2);
+
   // UI Flow Control States
-  const [viewState, setViewState] = useState('placeholder'); // placeholder | loading | roadmap | quiz
+  const [viewState, setViewState] = useState('prompt'); // prompt | loading | roadmap | quiz | career
   const [loadingMessage, setLoadingMessage] = useState('');
-  
+  const [loadingSteps, setLoadingSteps] = useState(ROADMAP_STEPS);
+
   // Data Payload Storage States
   const [roadmapData, setRoadmapData] = useState(null);
   const [activeQuiz, setActiveQuiz] = useState(null);
   const [quizAnswers, setQuizAnswers] = useState({}); // { question_number: string }
   const [quizResult, setQuizResult] = useState(null);
+
+  // NEW: Career Boost states — resume file + ATS scan report
+  const [resumeFile, setResumeFile] = useState(null);
+  const [careerReport, setCareerReport] = useState(null);
+
+  // NEW: Saved session states — every generated roadmap persists server-side
+  const [savedPaths, setSavedPaths] = useState([]);
+  const [activePathId, setActivePathId] = useState(null);
+
+  // Everything interactive locks while a generation request is in flight
+  const isBusy = viewState === 'loading';
+
+  // =========================================================================
+  // NEW: Session history — fetch the user's saved roadmaps on login
+  // =========================================================================
+  const refreshSavedPaths = async (token = authToken) => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/paths`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (response.ok) setSavedPaths(await response.json());
+    } catch {
+      // History is a convenience — never block the app if it can't load
+    }
+  };
+
+  useEffect(() => {
+    if (authToken) refreshSavedPaths();
+  }, [authToken]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Action: Load a past session — restores the roadmap and its original parameters
+  const handleLoadPath = async (pathId) => {
+    if (isBusy) return;
+    try {
+      const response = await authFetch(`${BACKEND_URL}/api/paths/${pathId}`);
+      if (!response.ok) throw new Error('Could not load that session.');
+      const record = await response.json();
+      setRoadmapData(record.roadmap);
+      setGoal(record.topic);
+      setExperienceLevel(record.experience_level);
+      setHoursPerDay(record.hours_per_day);
+      setActivePathId(record.id);
+      setActiveQuiz(null);
+      setQuizResult(null);
+      setViewState('roadmap');
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  // Action: Delete a saved session
+  const handleDeletePath = async (e, pathId) => {
+    e.stopPropagation(); // don't also trigger the row's load handler
+    if (!confirm('Delete this learning path? This cannot be undone.')) return;
+    try {
+      await authFetch(`${BACKEND_URL}/api/paths/${pathId}`, { method: 'DELETE' });
+      setSavedPaths(savedPaths.filter((p) => p.id !== pathId));
+      if (pathId === activePathId) {
+        setActivePathId(null);
+        setRoadmapData(null);
+        setViewState('prompt');
+      }
+    } catch {
+      alert('Failed to delete the session.');
+    }
+  };
 
   // Action: Register or log in, then persist the session token
   const handleAuthSubmit = async (e) => {
@@ -83,7 +171,11 @@ export default function App() {
     setUserEmail(null);
     setRoadmapData(null);
     setActiveQuiz(null);
-    setViewState('placeholder');
+    setCareerReport(null);
+    setResumeFile(null);
+    setSavedPaths([]);
+    setActivePathId(null);
+    setViewState('prompt');
   };
 
   // Wrapper around fetch that attaches the JWT and logs out on expired/invalid sessions
@@ -102,12 +194,14 @@ export default function App() {
   // Action: Trigger Dynamic AI Roadmap Generation
   const handleGeneratePath = async (e) => {
     e.preventDefault();
-    setLoadingMessage('Architecting your journey with Azure OpenAI...');
+    if (isBusy) return; // guard against double-submits interrupting an active run
+    setLoadingMessage('Architecting your journey with Azure OpenAI');
+    setLoadingSteps(ROADMAP_STEPS);
     setViewState('loading');
 
     try {
       // =========================================================================
-      // CHANGED: Endpoint matched to production API path `/api/generate` 
+      // CHANGED: Endpoint matched to production API path `/api/generate`
       // CHANGED: Parameters updated to pass `hours_per_day` instead of `weekly_hours`
       // =========================================================================
       const response = await authFetch(`${BACKEND_URL}/api/generate`, {
@@ -123,17 +217,21 @@ export default function App() {
       if (!response.ok) throw new Error('Network validation fail');
       const data = await response.json();
       setRoadmapData(data);
+      setActivePathId(data.path_id || null);
+      refreshSavedPaths(); // the backend auto-saved this run as a new session
       setViewState('roadmap');
-    
+
     } catch (err) {
       alert(`Frontend Error: ${err.message}`);
-      setViewState('placeholder');
+      setViewState('prompt');
     }
   };
 
   // Action: Fetch Dynamic Quiz Schema
   const handleFetchQuiz = async (milestone, weekNum) => {
-    setLoadingMessage('Assembling milestone assessment...');
+    if (isBusy) return;
+    setLoadingMessage('Assembling milestone assessment');
+    setLoadingSteps(QUIZ_STEPS);
     setViewState('loading');
 
     try {
@@ -156,7 +254,9 @@ export default function App() {
   // Action: Post Quiz Answers for AI Grading
   const handleQuizSubmit = async (e) => {
     e.preventDefault();
-    setLoadingMessage('Analyzing answers and writing deep feedback...');
+    if (isBusy) return;
+    setLoadingMessage('Analyzing answers and writing deep feedback');
+    setLoadingSteps(GRADE_STEPS);
     setViewState('loading');
 
     const formattedAnswers = activeQuiz.questions.map(q => ({
@@ -183,6 +283,38 @@ export default function App() {
       setViewState('roadmap');
     }
   };
+
+  // =========================================================================
+  // NEW: Career Boost — upload resume, run the GPT-5 ATS scan, show the report
+  // =========================================================================
+  const handleAnalyzeResume = async () => {
+    if (!resumeFile || isBusy) return;
+    setLoadingMessage('Auditing your resume with GPT-5');
+    setLoadingSteps(RESUME_STEPS);
+    setViewState('loading');
+
+    try {
+      const formData = new FormData();
+      formData.append('file', resumeFile);
+      // No Content-Type header — the browser sets the multipart boundary itself
+      const response = await authFetch(`${BACKEND_URL}/api/resume/analyze`, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Resume analysis failed.');
+      setCareerReport(data);
+      setViewState('career');
+    } catch (err) {
+      alert(`Resume scan failed: ${err.message}`);
+      setViewState('prompt');
+    }
+  };
+
+  // =========================================================================
+  // NEW: Roadmap export actions — Markdown file + print-to-PDF
+  // =========================================================================
+  const exportMeta = { level: experienceLevel, hoursPerDay };
 
   // =========================================================================
   // NEW: Account gate — unauthenticated visitors see the login/register card
@@ -254,13 +386,174 @@ export default function App() {
     );
   }
 
+  // =========================================================================
+  // Shared parameters form card — full-width on the prompt page, sidebar in
+  // the workspace. Every control locks while a request is in flight.
+  // =========================================================================
+  const parametersCard = (
+    <section className="bg-white p-6 rounded-2xl border border-[#E5E5EA] shadow-[0_4px_24px_rgba(0,0,0,0.02)]">
+      <h2 className="text-sm font-semibold tracking-wide text-[#1D1D1F] uppercase mb-4 flex items-center gap-1.5">
+        Parameters
+      </h2>
+      <form onSubmit={handleGeneratePath} className="space-y-5">
+        <div>
+          <label className="block text-xs font-semibold text-[#86868B] mb-2">TARGET EXPERTISE</label>
+          <textarea
+            value={goal}
+            onChange={(e) => setGoal(e.target.value)}
+            rows={3}
+            required
+            disabled={isBusy}
+            placeholder="e.g., Python backend development with FastAPI, building relational SQL databases, and setting up Docker container systems..."
+            className="w-full p-3 bg-[#F5F5F7] border border-transparent rounded-xl focus:outline-hidden focus:border-blue-500 focus:bg-white text-sm transition-all resize-none placeholder-[#86868B]/70 font-medium disabled:opacity-50"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-[#86868B] mb-2">EXPERIENCE PROFILE</label>
+          <div className="grid grid-cols-3 gap-1.5 p-1 bg-[#F5F5F7] rounded-xl border border-[#E5E5EA]/40">
+            {['beginner', 'intermediate', 'advanced'].map((lvl) => (
+              <button
+                key={lvl}
+                type="button"
+                onClick={() => setExperienceLevel(lvl)}
+                disabled={isBusy}
+                className={`text-xs py-2 rounded-lg font-medium capitalize transition-all cursor-pointer disabled:opacity-50 ${
+                  experienceLevel === lvl
+                    ? 'bg-white text-neutral-900 shadow-xs border border-[#E5E5EA]'
+                    : 'text-[#86868B] hover:text-[#1D1D1F]'
+                }`}
+              >
+                {lvl}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="flex justify-between items-center mb-1">
+            {/* =========================================================================
+                CHANGED: UI label and slider constraints updated to manage Daily Commitment
+                ========================================================================= */}
+            <label className="block text-xs font-semibold text-[#86868B]">DAILY TIME COMMITMENT</label>
+            <span className="text-xs font-bold text-blue-600">{hoursPerDay} hrs/day</span>
+          </div>
+          <input
+            type="range"
+            min={1}
+            max={8}
+            value={hoursPerDay}
+            disabled={isBusy}
+            onChange={(e) => setHoursPerDay(parseInt(e.target.value))}
+            className="w-full h-1 bg-[#E5E5EA] rounded-lg appearance-none cursor-pointer accent-blue-600 disabled:opacity-50"
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={isBusy}
+          className="w-full bg-neutral-900 hover:bg-neutral-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium py-3 rounded-xl transition-all shadow-md shadow-neutral-900/10 cursor-pointer flex items-center justify-center gap-2 text-sm"
+        >
+          <Sparkles size={16} /> {isBusy ? 'Generating...' : 'Generate Roadmap'}
+        </button>
+      </form>
+    </section>
+  );
+
+  // NEW: Career Boost upload card — lives on the prompt page under Parameters
+  const careerBoostCard = (
+    <section className="bg-white p-6 rounded-2xl border border-[#E5E5EA] shadow-[0_4px_24px_rgba(0,0,0,0.02)]">
+      <h2 className="text-sm font-semibold tracking-wide text-[#1D1D1F] uppercase mb-1 flex items-center gap-1.5">
+        Career Boost
+      </h2>
+      <p className="text-xs text-[#86868B] font-medium mb-4 leading-relaxed">
+        Upload your resume — GPT-5 runs an ATS error scan, suggests enhancements, and matches you to live LinkedIn & Indeed job searches.
+      </p>
+      <div className="flex flex-col sm:flex-row gap-2.5">
+        <label className={`flex-1 flex items-center justify-center gap-2 p-3 bg-[#F5F5F7] hover:bg-[#E5E5EA]/60 border border-dashed border-[#D2D2D7] rounded-xl text-xs font-medium text-[#515154] transition-all ${isBusy ? 'opacity-50' : 'cursor-pointer'}`}>
+          <Upload size={14} className="shrink-0" />
+          <span className="truncate">{resumeFile ? resumeFile.name : 'Choose file (PDF, DOCX, TXT, or image)'}</span>
+          <input
+            type="file"
+            accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.webp"
+            disabled={isBusy}
+            onChange={(e) => setResumeFile(e.target.files?.[0] || null)}
+            className="hidden"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={handleAnalyzeResume}
+          disabled={!resumeFile || isBusy}
+          className="bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium px-4 py-3 rounded-xl transition-all cursor-pointer inline-flex items-center justify-center gap-1.5 text-xs"
+        >
+          <ScanSearch size={14} /> Scan Resume
+        </button>
+      </div>
+    </section>
+  );
+
+  // =========================================================================
+  // NEW: Session history card — chat-style tabs for every saved roadmap.
+  // Click a row to reopen it, trash to delete, "+ New Path" for a fresh start.
+  // =========================================================================
+  const sessionsCard = savedPaths.length > 0 && (
+    <section className="bg-white p-5 rounded-2xl border border-[#E5E5EA] shadow-[0_4px_24px_rgba(0,0,0,0.02)]">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-semibold tracking-wide text-[#1D1D1F] uppercase flex items-center gap-1.5">
+          <History size={14} className="text-[#86868B]" /> Your Paths
+        </h2>
+        {viewState !== 'prompt' && (
+          <button
+            onClick={() => !isBusy && setViewState('prompt')}
+            className="text-[11px] font-semibold text-blue-600 hover:underline cursor-pointer inline-flex items-center gap-0.5"
+          >
+            <Plus size={12} /> New Path
+          </button>
+        )}
+      </div>
+      <div className="space-y-1.5 max-h-72 overflow-y-auto">
+        {savedPaths.map((p) => (
+          <div
+            key={p.id}
+            onClick={() => handleLoadPath(p.id)}
+            className={`group flex items-center justify-between gap-2 p-2.5 rounded-xl cursor-pointer border text-xs font-medium transition-all ${
+              p.id === activePathId
+                ? 'bg-blue-50/50 border-blue-500/40 text-blue-900'
+                : 'bg-[#F5F5F7] border-transparent hover:bg-[#E5E5EA]/60 text-neutral-700'
+            }`}
+          >
+            <div className="min-w-0">
+              <p className="truncate font-semibold">{p.title}</p>
+              <p className="text-[10px] text-[#86868B] font-medium capitalize">
+                {p.experience_level} · {p.hours_per_day} hrs/day · {new Date(p.created_at + 'Z').toLocaleDateString()}
+              </p>
+            </div>
+            <button
+              onClick={(e) => handleDeletePath(e, p.id)}
+              title="Delete this path"
+              className="opacity-0 group-hover:opacity-100 text-[#86868B] hover:text-rose-600 p-1 rounded-md transition-all cursor-pointer shrink-0"
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+
   return (
     <div className="bg-[#F5F5F7] text-[#1D1D1F] min-h-screen flex flex-col font-sans selection:bg-blue-500/20">
 
       {/* Premium Apple-Style Glassmorphism Navbar */}
       <header className="sticky top-0 z-50 bg-white/70 backdrop-blur-md border-b border-[#D2D2D7]/30 px-6 py-4">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
+          {/* Logo doubles as a home button back to the prompt page (unless a request is running) */}
+          <button
+            onClick={() => !isBusy && setViewState('prompt')}
+            title="New path / Career Boost"
+            className="flex items-center gap-2.5 cursor-pointer text-left"
+          >
             <div className="bg-neutral-900 text-white p-2 rounded-xl shadow-xs">
               <Layers size={20} className="stroke-[2.2]" />
             </div>
@@ -268,7 +561,7 @@ export default function App() {
               <h1 className="text-base font-semibold tracking-tight text-neutral-900">PathCraft</h1>
               <p className="text-[10px] text-[#86868B] font-medium tracking-wide uppercase">AI Systems</p>
             </div>
-          </div>
+          </button>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 rounded-full border border-emerald-500/20">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -287,106 +580,79 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Container Workspace */}
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-8 grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
-        
-        {/* Left Interactive Control Panel Card */}
-        <section className="md:col-span-4 bg-white p-6 rounded-2xl border border-[#E5E5EA] shadow-[0_4px_24px_rgba(0,0,0,0.02)] sticky top-24">
-          <h2 className="text-sm font-semibold tracking-wide text-[#1D1D1F] uppercase mb-4 flex items-center gap-1.5">
-            Parameters
-          </h2>
-          <form onSubmit={handleGeneratePath} className="space-y-5">
-            <div>
-              <label className="block text-xs font-semibold text-[#86868B] mb-2">TARGET EXPERTISE</label>
-              <textarea
-                value={goal}
-                onChange={(e) => setGoal(e.target.value)}
-                rows={3}
-                required
-                placeholder="e.g., Python backend development with FastAPI, building relational SQL databases, and setting up Docker container systems..."
-                className="w-full p-3 bg-[#F5F5F7] border border-transparent rounded-xl focus:outline-hidden focus:border-blue-500 focus:bg-white text-sm transition-all resize-none placeholder-[#86868B]/70 font-medium"
-              />
-            </div>
+      {/* =========================================================================
+          NEW: Prompt-first landing — right after sign-in the user sees only the
+          parameters card (plus Career Boost), centered. The workspace grid only
+          appears once there's something to show.
+          ========================================================================= */}
+      {viewState === 'prompt' && (
+        <main className="flex-1 w-full max-w-xl mx-auto px-4 py-12 space-y-5 animate-fadeIn">
+          <div className="text-center space-y-1.5 mb-8">
+            <h2 className="text-2xl font-semibold tracking-tight text-[#1D1D1F]">What do you want to master?</h2>
+            <p className="text-xs text-[#86868B] font-medium">Describe your goal and PathCraft will architect a week-by-week blueprint.</p>
+          </div>
+          {parametersCard}
+          {careerBoostCard}
+          {sessionsCard}
+        </main>
+      )}
 
-            <div>
-              <label className="block text-xs font-semibold text-[#86868B] mb-2">EXPERIENCE PROFILE</label>
-              <div className="grid grid-cols-3 gap-1.5 p-1 bg-[#F5F5F7] rounded-xl border border-[#E5E5EA]/40">
-                {['beginner', 'intermediate', 'advanced'].map((lvl) => (
-                  <button
-                    key={lvl}
-                    type="button"
-                    onClick={() => setExperienceLevel(lvl)}
-                    className={`text-xs py-2 rounded-lg font-medium capitalize transition-all cursor-pointer ${
-                      experienceLevel === lvl 
-                        ? 'bg-white text-neutral-900 shadow-xs border border-[#E5E5EA]' 
-                        : 'text-[#86868B] hover:text-[#1D1D1F]'
-                    }`}
-                  >
-                    {lvl}
-                  </button>
-                ))}
-              </div>
-            </div>
+      {/* View Container: Animated Loading Transition Page */}
+      {viewState === 'loading' && (
+        <main className="flex-1 w-full max-w-2xl mx-auto px-4 py-12">
+          <LoadingScreen title={loadingMessage} steps={loadingSteps} />
+        </main>
+      )}
 
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                {/* =========================================================================
-                    CHANGED: UI label and slider constraints updated to manage Daily Commitment
-                    ========================================================================= */}
-                <label className="block text-xs font-semibold text-[#86868B]">DAILY TIME COMMITMENT</label>
-                <span className="text-xs font-bold text-blue-600">{hoursPerDay} hrs/day</span>
-              </div>
-              <input
-                type="range"
-                min={1}
-                max={8}
-                value={hoursPerDay}
-                onChange={(e) => setHoursPerDay(parseInt(e.target.value))}
-                className="w-full h-1 bg-[#E5E5EA] rounded-lg appearance-none cursor-pointer accent-blue-600"
-              />
-            </div>
+      {/* View Container: ATS Career Report */}
+      {viewState === 'career' && careerReport && (
+        <main className="flex-1 w-full max-w-6xl mx-auto px-4 py-8">
+          <CareerReport
+            report={careerReport}
+            onBack={() => setViewState(roadmapData ? 'roadmap' : 'prompt')}
+          />
+        </main>
+      )}
 
-            <button
-              type="submit"
-              className="w-full bg-neutral-900 hover:bg-neutral-800 text-white font-medium py-3 rounded-xl transition-all shadow-md shadow-neutral-900/10 cursor-pointer flex items-center justify-center gap-2 text-sm"
-            >
-              <Sparkles size={16} /> Generate Roadmap
-            </button>
-          </form>
-        </section>
+      {/* Main Container Workspace — roadmap & quiz views keep the sidebar */}
+      {(viewState === 'roadmap' || viewState === 'quiz') && (
+        <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-8 grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
 
-        {/* Right Output Layout Stream */}
-        <section className="md:col-span-8 min-h-[450px]">
-          
-          {/* View Container: Empty Initial State */}
-          {viewState === 'placeholder' && (
-            <div className="bg-white border border-dashed border-[#D2D2D7] rounded-2xl p-12 text-center flex flex-col items-center justify-center min-h-[450px]">
-              <div className="w-14 h-14 bg-[#F5F5F7] rounded-full flex items-center justify-center text-[#86868B] mb-4">
-                <Layers size={22} />
-              </div>
-              <h3 className="text-base font-semibold text-[#1D1D1F] mb-1">Awaiting Path Request</h3>
-              <p className="text-xs max-w-xs text-[#86868B] leading-relaxed font-medium">Specify your educational goals on the left configuration column to create a structured AI-driven learning blueprint.</p>
-            </div>
-          )}
+          {/* Left Interactive Control Panel Card */}
+          <div className="md:col-span-4 sticky top-24 space-y-5">
+            {parametersCard}
+            {sessionsCard}
+          </div>
 
-          {/* View Container: Loading Transition State */}
-          {viewState === 'loading' && (
-            <div className="bg-white border border-[#E5E5EA] rounded-2xl p-12 text-center flex flex-col items-center justify-center min-h-[450px] shadow-[0_4px_24px_rgba(0,0,0,0.01)]">
-              <div className="w-10 h-10 border-3 border-[#E5E5EA] border-t-neutral-900 rounded-full animate-spin mb-4"></div>
-              <h3 className="text-sm font-semibold text-[#1D1D1F] mb-1">Processing Session</h3>
-              <p className="text-xs text-[#86868B] font-medium">{loadingMessage}</p>
-            </div>
-          )}
+          {/* Right Output Layout Stream */}
+          <section className="md:col-span-8 min-h-[450px]">
 
-          {/* View Container: Beautiful Dynamic Roadmap Stream */}
-          {viewState === 'roadmap' && roadmapData && (
+            {/* View Container: Beautiful Dynamic Roadmap Stream */}
+            {viewState === 'roadmap' && roadmapData && (
             <div className="space-y-6 animate-fadeIn">
               <div className="bg-neutral-900 p-6 rounded-2xl text-white shadow-xs relative overflow-hidden">
+                {/* NEW: Export controls — save the roadmap as PDF or Markdown */}
+                <div className="absolute top-5 right-5 flex gap-1.5">
+                  <button
+                    onClick={() => printRoadmapPdf(roadmapData, exportMeta)}
+                    title="Download as PDF"
+                    className="text-[#A1A1A6] hover:text-white p-2 bg-neutral-800 hover:bg-neutral-700 rounded-lg transition-all cursor-pointer"
+                  >
+                    <Download size={14} />
+                  </button>
+                  <button
+                    onClick={() => downloadRoadmapMarkdown(roadmapData, exportMeta)}
+                    title="Download as Markdown"
+                    className="text-[#A1A1A6] hover:text-white p-2 bg-neutral-800 hover:bg-neutral-700 rounded-lg transition-all cursor-pointer"
+                  >
+                    <FileText size={14} />
+                  </button>
+                </div>
                 <span className="text-[10px] font-bold tracking-widest text-blue-400 uppercase">Target Blueprint</span>
                 {/* =========================================================================
                     CHANGED: Extracted backend data nodes (`title` and `calculated_total_weeks`)
                     ========================================================================= */}
-                <h2 className="text-lg font-semibold mt-1 tracking-tight pr-12">{roadmapData.title}</h2>
+                <h2 className="text-lg font-semibold mt-1 tracking-tight pr-24">{roadmapData.title}</h2>
                 <div className="flex flex-wrap gap-5 mt-4 text-[11px] text-[#86868B] font-medium border-t border-neutral-800 pt-4">
                   <div className="flex items-center gap-1.5 text-[#A1A1A6]"><Layers size={13} /> Level: <span className="text-white capitalize font-semibold">{experienceLevel}</span></div>
                   <div className="flex items-center gap-1.5 text-[#A1A1A6]"><Clock size={13} /> Commitment: <span className="text-white font-semibold">{hoursPerDay} hrs/day</span></div>
@@ -400,7 +666,7 @@ export default function App() {
                     ========================================================================= */}
                 {roadmapData.weeks?.map((wk, i) => (
                   <div key={i} className="bg-white border border-[#E5E5EA] rounded-2xl p-5 hover:border-[#D2D2D7] hover:shadow-xs transition-all flex flex-col gap-4">
-                    
+
                     {/* Upper Core Node Metas */}
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div className="flex items-start gap-4">
@@ -430,7 +696,7 @@ export default function App() {
                     </div>
 
                     {/* =========================================================================
-                        NEW: Legitimate Live Resource Link Blocks Container 
+                        NEW: Legitimate Live Resource Link Blocks Container
                         Renders hyper-targeted clickable streaming titles sourced directly from YouTube
                         ========================================================================= */}
                     {wk.live_resources && wk.live_resources.length > 0 && (
@@ -490,14 +756,14 @@ export default function App() {
           {/* View Container: Assessment Mode Card */}
           {viewState === 'quiz' && activeQuiz && (
             <div className="bg-white border border-[#E5E5EA] rounded-2xl p-6 shadow-xs space-y-6 animate-fadeIn">
-              
+
               {/* Header Context Bar */}
               <div className="flex items-center justify-between border-b border-[#F5F5F7] pb-4">
                 <div>
                   <span className="text-[10px] font-bold tracking-wider text-blue-600 uppercase">Week {activeQuiz.week_number} Evaluation</span>
                   <h3 className="text-base font-semibold text-[#1D1D1F] tracking-tight">{activeQuiz.milestone}</h3>
                 </div>
-                <button 
+                <button
                   onClick={() => setViewState('roadmap')}
                   className="text-[#86868B] hover:text-[#1D1D1F] p-1.5 bg-[#F5F5F7] hover:bg-[#E5E5EA] rounded-full transition-all cursor-pointer"
                 >
@@ -514,12 +780,12 @@ export default function App() {
                         <span className="text-neutral-400 font-mono text-xs mt-0.5">{q.question_number}.</span>
                         {q.question}
                       </h4>
-                      
+
                       {q.type === 'multiple_choice' ? (
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           {q.options?.map((opt, oIdx) => (
-                            <label 
-                              key={oIdx} 
+                            <label
+                              key={oIdx}
                               className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer border text-xs font-medium transition-all ${
                                 quizAnswers[q.question_number] === opt
                                   ? 'bg-blue-50/50 border-blue-500 text-blue-900'
@@ -579,11 +845,11 @@ export default function App() {
                   <div className="space-y-3">
                     <h5 className="text-xs font-bold text-[#86868B] tracking-wider uppercase">Itemized Audit</h5>
                     {quizResult?.feedback?.map((fb, idx) => (
-                      <div 
-                        key={idx} 
+                      <div
+                        key={idx}
                         className={`p-4 border rounded-xl text-xs font-medium ${
-                          fb.correct 
-                            ? 'border-emerald-500/10 bg-emerald-50/20' 
+                          fb.correct
+                            ? 'border-emerald-500/10 bg-emerald-50/20'
                             : 'border-rose-500/10 bg-rose-50/20'
                         }`}
                       >
@@ -597,7 +863,7 @@ export default function App() {
                     ))}
                   </div>
 
-                  <button 
+                  <button
                     onClick={() => setViewState('roadmap')}
                     className="w-full bg-neutral-900 hover:bg-neutral-800 text-white font-medium p-3 rounded-xl text-xs transition-all cursor-pointer flex items-center justify-center gap-1.5"
                   >
@@ -608,8 +874,9 @@ export default function App() {
             </div>
           )}
 
-        </section>
-      </main>
+          </section>
+        </main>
+      )}
     </div>
   );
 }

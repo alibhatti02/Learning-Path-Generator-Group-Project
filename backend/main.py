@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from routes.learning_path import router as learning_path_router
 from routes.auth import router as auth_router
 from routes.quiz import router as quiz_router
+from routes.resume import router as resume_router
+from routes.paths import router as paths_router
 from services.database import init_db
 
 # Load .env before anything reads the environment — don't rely on
@@ -50,6 +52,8 @@ app.add_middleware(
 app.include_router(learning_path_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(quiz_router, prefix="/api")
+app.include_router(resume_router, prefix="/api")
+app.include_router(paths_router, prefix="/api")
 
 # Define a baseline GET endpoint at the absolute root URL to handle simple connectivity health checks.
 @app.get("/")

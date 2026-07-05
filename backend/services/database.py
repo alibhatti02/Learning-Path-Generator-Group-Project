@@ -21,7 +21,7 @@ def get_db() -> Iterator[sqlite3.Connection]:
 
 
 def init_db() -> None:
-    """Creates the users table on first boot. Passwords are only ever stored as bcrypt hashes."""
+    """Creates all tables on first boot. Passwords are only ever stored as bcrypt hashes."""
     with get_db() as conn:
         conn.execute(
             """
@@ -30,6 +30,31 @@ def init_db() -> None:
                 email TEXT NOT NULL UNIQUE COLLATE NOCASE,
                 password_hash TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        # Saved roadmap sessions — one row per generated path, newest first in the UI
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS learning_paths (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                title TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                experience_level TEXT NOT NULL,
+                hours_per_day INTEGER NOT NULL,
+                roadmap_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        # YouTube search cache — repeated queries cost 0 quota units instead of 100
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS youtube_cache (
+                query TEXT PRIMARY KEY,
+                results_json TEXT NOT NULL,
+                cached_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
             """
         )

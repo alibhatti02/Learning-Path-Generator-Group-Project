@@ -12,6 +12,10 @@ endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
 deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "")
 api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-05-01-preview")
 
+# gpt-5 reasoning effort: "low"/"minimal" cuts latency dramatically for structured
+# JSON output. Overridable via env; auto-disabled if the deployment rejects it.
+reasoning_effort = os.getenv("AZURE_REASONING_EFFORT", "low")
+
 # Lazily initialize the Azure OpenAI client so the app can still boot (auth, health checks)
 # when Azure credentials are absent — the error surfaces on first AI call instead of at import.
 _client = None
@@ -25,6 +29,36 @@ def get_azure_client() -> AzureOpenAI:
             api_version=api_version
         )
     return _client
+
+# Remembers a rejection so we don't pay a failed round-trip on every call
+_reasoning_effort_supported = True
+
+def azure_chat_json(messages: list[dict]) -> dict:
+    """
+    Single entry point for Azure JSON-mode chat calls. Tries the reasoning_effort
+    speedup first and permanently falls back if the SDK or deployment rejects it.
+    """
+    global _reasoning_effort_supported
+    kwargs = {
+        "model": deployment_name,
+        "response_format": {"type": "json_object"},
+        "messages": messages,
+    }
+    if _reasoning_effort_supported and reasoning_effort:
+        try:
+            response = get_azure_client().chat.completions.create(
+                **kwargs, reasoning_effort=reasoning_effort
+            )
+            return json.loads(response.choices[0].message.content)
+        except TypeError:
+            _reasoning_effort_supported = False  # openai SDK too old for the param
+        except Exception as e:
+            if "reasoning_effort" in str(e) or "reasoning.effort" in str(e):
+                _reasoning_effort_supported = False  # deployment/API version rejects it
+            else:
+                raise
+    response = get_azure_client().chat.completions.create(**kwargs)
+    return json.loads(response.choices[0].message.content)
 
 def generate_learning_roadmap(topic: str, hours_per_day: int, level: str) -> dict:
     """
@@ -65,17 +99,10 @@ def generate_learning_roadmap(topic: str, hours_per_day: int, level: str) -> dic
         )
         
         # Dispatch the request to your deployment
-        response = get_azure_client().chat.completions.create(
-            model=deployment_name,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ]
-        )
-        
-        raw_content = response.choices[0].message.content
-        return json.loads(raw_content)
+        return azure_chat_json([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ])
 
     except Exception as e:
         print("\n" + "="*60)

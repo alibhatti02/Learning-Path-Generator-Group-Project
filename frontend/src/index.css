@@ -5,3 +5,52 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* View-transition fade — App.jsx referenced this class but it was never defined */
+@keyframes cf-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+.animate-fadeIn {
+  animation: cf-fade-in 0.45s ease-out both;
+}
+
+/* Loading page: counter-rotating inner ring */
+@keyframes cf-spin-reverse-kf {
+  to { transform: rotate(-360deg); }
+}
+.cf-spin-reverse {
+  animation: cf-spin-reverse-kf 1.6s linear infinite;
+}
+
+/* Loading page: pulsing energy core + active step marker */
+@keyframes cf-pulse-core-kf {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.88); }
+}
+.cf-pulse-core {
+  animation: cf-pulse-core-kf 1.4s ease-in-out infinite;
+}
+
+/* Loading page: light sweep across the progress bar */
+@keyframes cf-shimmer-kf {
+  from { background-position: -200% 0; }
+  to { background-position: 200% 0; }
+}
+.cf-shimmer {
+  background-image: linear-gradient(90deg, #171717 0%, #171717 35%, #3b82f6 50%, #171717 65%, #171717 100%);
+  background-size: 200% 100%;
+  animation: cf-shimmer-kf 1.8s linear infinite;
+}
+
+/* Loading page: animated trailing ellipsis on the active step */
+@keyframes cf-ellipsis-kf {
+  0% { content: ''; }
+  25% { content: '.'; }
+  50% { content: '..'; }
+  75% { content: '...'; }
+}
+.cf-ellipsis::after {
+  content: '';
+  animation: cf-ellipsis-kf 1.2s steps(1) infinite;
+}

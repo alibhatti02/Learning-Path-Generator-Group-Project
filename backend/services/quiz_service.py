@@ -3,7 +3,7 @@ import os
 
 import requests
 
-from services.ai_service import deployment_name, get_azure_client
+from services.ai_service import azure_chat_json
 
 # Local Ollama handles quizzes by default (free, low latency); Azure OpenAI is the
 # automatic fallback when Ollama is unreachable — e.g. on an Azure deployment with no local model.
@@ -33,15 +33,10 @@ def _call_ollama(system_prompt: str, user_prompt: str) -> dict:
 
 
 def _call_azure(system_prompt: str, user_prompt: str) -> dict:
-    response = get_azure_client().chat.completions.create(
-        model=deployment_name,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-    )
-    return json.loads(response.choices[0].message.content)
+    return azure_chat_json([
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ])
 
 
 def _call_llm(system_prompt: str, user_prompt: str) -> dict:

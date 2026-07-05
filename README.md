@@ -481,7 +481,8 @@ firebase deploy
 
 ### Missing video resources / YouTube warnings
 - `⚠️ WARNING: YOUTUBE_API_KEY missing` in backend logs → add your key to `.env` (see [Getting your own YouTube API key](#-getting-your-own-youtube-api-key-required--one-per-teammate)) and restart the backend
-- Paths generate but weeks have no video links → same cause as above, or your daily YouTube quota ran out (`403` errors in logs); quota resets at midnight Pacific time
+- Paths generate but weeks have no video links → same cause as above, or your daily YouTube quota ran out (`429` errors in logs); quota resets at midnight Pacific time
+- **Good news:** When quota is exhausted or the key is missing, you get clickable YouTube search links (e.g., "Search YouTube: NumPy arrays") instead of empty resources. Real video links are fetched and cached as soon as quota resets.
 - Remember: `.env` changes require a **manual** backend restart — `--reload` only watches `.py` files
 
 ### Login/session issues
@@ -512,11 +513,13 @@ firebase deploy
 ## 📌 Notes for Developers
 
 - **No keys in code:** All credentials live in `.env` — never commit them
+- **API key protection:** Error logs are scrubbed to prevent accidental key exposure (e.g., when sharing terminal output). YouTube API key leaks are removed before printing.
 - **Use `--reload` during dev:** Backend auto-restarts on file changes
 - **Check Swagger:** Open `/docs` to explore endpoints and schemas
 - **Passwords are unrecoverable by design:** Only bcrypt hashes touch the database — there is no way (and no backdoor) to read a user's password
 - **Known MVP tradeoff:** Generated quizzes include `correct_answer` in the payload the browser echoes back on submit, so grading stays stateless. Moving quiz storage server-side (planned with DB persistence) closes this
 - **Model configs are flexible:** Override model names via `.env` without touching code
+- **Graceful fallbacks:** Missing YouTube key or quota exhaustion → search links. Ollama down → Azure OpenAI handles quizzes. Resource fetches never crash the app.
 
 ---
 
