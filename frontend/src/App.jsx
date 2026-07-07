@@ -327,7 +327,7 @@ export default function App() {
             <div className="bg-neutral-900 text-white p-2.5 rounded-xl inline-flex">
               <Layers size={22} className="stroke-[2.2]" />
             </div>
-            <h1 className="text-lg font-semibold tracking-tight">PathCraft</h1>
+            <h1 className="text-lg font-semibold tracking-tight">Course Forge</h1>
             <p className="text-xs text-[#86868B] font-medium">
               {authMode === 'login' ? 'Sign in to access your learning paths' : 'Create an account to get started'}
             </p>
@@ -558,7 +558,7 @@ export default function App() {
               <Layers size={20} className="stroke-[2.2]" />
             </div>
             <div>
-              <h1 className="text-base font-semibold tracking-tight text-neutral-900">PathCraft</h1>
+              <h1 className="text-base font-semibold tracking-tight text-neutral-900">Course Forge</h1>
               <p className="text-[10px] text-[#86868B] font-medium tracking-wide uppercase">AI Systems</p>
             </div>
           </button>
@@ -589,7 +589,7 @@ export default function App() {
         <main className="flex-1 w-full max-w-xl mx-auto px-4 py-12 space-y-5 animate-fadeIn">
           <div className="text-center space-y-1.5 mb-8">
             <h2 className="text-2xl font-semibold tracking-tight text-[#1D1D1F]">What do you want to master?</h2>
-            <p className="text-xs text-[#86868B] font-medium">Describe your goal and PathCraft will architect a week-by-week blueprint.</p>
+            <p className="text-xs text-[#86868B] font-medium">Describe your goal and Course Forge will architect a week-by-week blueprint.</p>
           </div>
           {parametersCard}
           {careerBoostCard}
