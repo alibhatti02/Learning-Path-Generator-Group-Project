@@ -60,3 +60,67 @@ class QuizSubmitRequest(BaseModel):
     questions: List[dict]
     answers: List[QuizAnswer]
 
+
+# ============================== Group Skills ==============================
+
+class GroupCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    skill_topic: str = Field(min_length=1, max_length=200)
+    experience_level: str = "beginner"
+
+
+class GroupJoinRequest(BaseModel):
+    invite_code: str = Field(min_length=1, max_length=32)
+
+
+class SetHoursRequest(BaseModel):
+    # Capped so the leaderboard mechanic can't push someone into an unsustainable daily grind
+    hourly_commitment: float = Field(ge=0.25, le=8)
+
+
+class GroupSummary(BaseModel):
+    id: int
+    name: str
+    skill_topic: str
+    experience_level: str
+    invite_code: str
+    member_count: int
+    max_members: int
+    status: str
+    created_at: str
+
+
+# Public-facing leaderboard row — deliberately has NO hours/pace field. This is the
+# only shape other members are ever allowed to see for one another.
+class LeaderboardEntry(BaseModel):
+    user_id: int
+    display_name: str
+    rank: int
+    total_points: int
+    current_week: int
+    status: str
+    is_me: bool = False
+
+
+class GroupLeaderboardResponse(BaseModel):
+    group: GroupSummary
+    leaderboard: List[LeaderboardEntry]
+    average_current_week: float  # anonymized pace signal, no individual is exposed
+
+
+# Private view — only ever returned for the requesting user's own membership
+class MyMembershipResponse(BaseModel):
+    group_id: int
+    hourly_commitment: Optional[float] = None
+    calculated_weeks: Optional[int] = None
+    current_week: int
+    total_points: int
+    status: str
+    roadmap: Optional[dict] = None
+    is_creator: bool = False
+
+
+class WeekCompleteRequest(BaseModel):
+    week_number: int = Field(ge=1, le=52)
+    quiz_score: int = Field(ge=0)
+    quiz_total: int = Field(ge=1)
