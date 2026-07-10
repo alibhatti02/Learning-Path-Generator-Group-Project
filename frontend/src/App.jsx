@@ -20,10 +20,12 @@ import {
   ScanSearch,
   History,
   Plus,
-  Trash2
+  Trash2,
+  Users
 } from 'lucide-react';
 import LoadingScreen from './components/LoadingScreen';
 import CareerReport from './components/CareerReport';
+import GroupSkills from './components/GroupSkills';
 import { downloadRoadmapMarkdown, printRoadmapPdf } from './utils/roadmapExport';
 
 const BACKEND_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
@@ -562,7 +564,21 @@ export default function App() {
               <p className="text-[10px] text-[#86868B] font-medium tracking-wide uppercase">AI Systems</p>
             </div>
           </button>
+          
+          
+          
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => !isBusy && setViewState('groups')}
+              title="Group Skills"
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer border ${
+                viewState === 'groups'
+                  ? 'bg-neutral-900 text-white border-neutral-900'
+                  : 'bg-[#F5F5F7] text-[#515154] border-transparent hover:bg-[#E5E5EA]'
+              }`}
+            >
+              <Users size={13} /> <span className="hidden sm:inline">Group Skills</span>
+            </button>
             <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 rounded-full border border-emerald-500/20">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
               <span className="text-[11px] font-semibold text-emerald-700 tracking-wide">Live Connection</span>
@@ -611,6 +627,13 @@ export default function App() {
             report={careerReport}
             onBack={() => setViewState(roadmapData ? 'roadmap' : 'prompt')}
           />
+        </main>
+      )}
+
+      {/* View Container: Group Skills */}
+      {viewState === 'groups' && (
+        <main className = "flex-1 w-full max-w-6x1 mx-auto px-4 py-8">
+          <GroupSkills authFetch={authFetch} BACKEND_URL={BACKEND_URL} />
         </main>
       )}
 
