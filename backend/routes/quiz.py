@@ -10,7 +10,7 @@ router = APIRouter(prefix="/quiz", tags=["quiz"])
 @router.post("/generate")
 def create_quiz(request: QuizGenerateRequest, user: dict = Depends(get_current_user)) -> dict:
     try:
-        return generate_quiz(milestone=request.milestone, week_number=request.week_number)
+        return generate_quiz(user["id"], request.milestone, request.week_number, request.group_id)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=f"Quiz generation failed: {e}")
 
@@ -18,11 +18,8 @@ def create_quiz(request: QuizGenerateRequest, user: dict = Depends(get_current_u
 @router.post("/submit")
 def submit_quiz(request: QuizSubmitRequest, user: dict = Depends(get_current_user)) -> dict:
     try:
-        return grade_quiz(
-            week_number=request.week_number,
-            milestone=request.milestone,
-            questions=request.questions,
-            answers=[a.model_dump() for a in request.answers],
-        )
+        return grade_quiz(user["id"], request.quiz_id, [a.model_dump() for a in request.answers])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=f"Quiz grading failed: {e}")

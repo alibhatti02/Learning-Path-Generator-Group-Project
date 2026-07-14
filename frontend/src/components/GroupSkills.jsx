@@ -238,7 +238,8 @@ export default function GroupSkills({ authFetch, BACKEND_URL }) {
       const res = await authFetch(`${BACKEND_URL}/api/quiz/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ milestone: wk.focus, week_number: weekIdx + 1 }),
+        // group_id binds the attempt to this group so its grade can only be logged here
+        body: JSON.stringify({ milestone: wk.focus, week_number: weekIdx + 1, group_id: activeGroupId }),
       });
       const data = await res.json();
       setActiveQuiz(data);
@@ -266,24 +267,21 @@ export default function GroupSkills({ authFetch, BACKEND_URL }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          week_number: activeQuiz.week_number,
-          milestone: activeQuiz.milestone,
-          questions: activeQuiz.questions,
+          quiz_id: activeQuiz.quiz_id,
           answers: formattedAnswers,
         }),
       });
       const graded = await res.json();
       setQuizResult(graded);
 
-      // Report the graded result into the group so points/rank update
+      // Log the week from the server-graded attempt — the backend reads the score
+      // from storage by quiz_id, so no score is trusted from the client here.
       const beforePoints = mine.total_points;
       const completeRes = await authFetch(`${BACKEND_URL}/api/groups/${activeGroupId}/complete-week`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          week_number: activeQuiz.week_number,
-          quiz_score: graded.score,
-          quiz_total: graded.total,
+          quiz_id: activeQuiz.quiz_id,
         }),
       });
       if (completeRes.ok) {

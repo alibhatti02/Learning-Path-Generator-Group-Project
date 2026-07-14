@@ -270,10 +270,10 @@ export default function App() {
       const response = await authFetch(`${BACKEND_URL}/api/quiz/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        // Server grades against the questions it stored at generation time —
+        // we only send back which quiz and the user's answers.
         body: JSON.stringify({
-          week_number: activeQuiz.week_number,
-          milestone: activeQuiz.milestone,
-          questions: activeQuiz.questions,
+          quiz_id: activeQuiz.quiz_id,
           answers: formattedAnswers
         })
       });
@@ -622,7 +622,7 @@ export default function App() {
 
       {/* View Container: ATS Career Report */}
       {viewState === 'career' && careerReport && (
-        <main className="flex-1 w-full max-w-6xl mx-auto px-4 py-8">
+        <main className="flex-l w-full max-w-6xl mx-auto px-4 py-8">
           <CareerReport
             report={careerReport}
             onBack={() => setViewState(roadmapData ? 'roadmap' : 'prompt')}

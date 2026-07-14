@@ -4,6 +4,7 @@ import sqlite3
 
 from services.ai_service import generate_learning_roadmap
 from services.database import get_db
+from services.quiz_service import get_attempt
 
 # Points awarded for finishing the whole course, by placement (1st through 6th).
 # Placement is determined by whoever's total_points/status flips to "completed" first.
@@ -161,12 +162,27 @@ def get_my_membership(user_id: int, group_id: int) -> dict:
     }
 
 
-def complete_week(user_id: int, group_id: int, week_number: int, quiz_score: int, quiz_total: int) -> dict:
-    """Records a week's quiz result, awards points, and advances the member's progress."""
+def complete_week(user_id: int, group_id: int, quiz_id: int) -> dict:
+    """
+    Logs a week's progress from a SERVER-GRADED quiz attempt. The score is read
+    from the stored attempt — never from the client — and the attempt must belong
+    to this user and this group, which is what keeps the leaderboard honest.
+    """
     with get_db() as conn:
         member = _member_row(conn, group_id, user_id)
         if member["calculated_weeks"] is None:
             raise ValueError("Set your hourly commitment before logging progress.")
+
+        attempt = get_attempt(user_id, quiz_id)
+        if attempt is None or attempt["status"] != "graded":
+            raise ValueError("Submit the quiz before logging this week.")
+        if attempt["group_id"] != group_id:
+            raise ValueError("This quiz doesn't belong to this group.")
+
+        # Trust only the server's stored grade and the attempt's own week number
+        week_number = attempt["week_number"]
+        quiz_score = attempt["score"]
+        quiz_total = attempt["total"]
         if week_number != member["current_week"] + 1:
             raise ValueError(f"Expected week {member['current_week'] + 1} next, got week {week_number}.")
 

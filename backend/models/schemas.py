@@ -48,16 +48,16 @@ class AuthResponse(BaseModel):
 class QuizGenerateRequest(BaseModel):
     milestone: str = Field(min_length=1, max_length=300)
     week_number: int = Field(ge=1, le=52)
+    group_id: Optional[int] = None
 
 class QuizAnswer(BaseModel):
     question_number: int
     answer: str = Field(default="", max_length=5000)
 
-# The frontend echoes the generated questions back on submit, so grading is stateless (no DB needed yet)
+# The client only sends the quiz_id + its answers; the server grades against the
+# questions it stored at generation time (see quiz_attempts), so answers never leave the server.
 class QuizSubmitRequest(BaseModel):
-    week_number: int = Field(ge=1, le=52)
-    milestone: str = Field(min_length=1, max_length=300)
-    questions: List[dict]
+    quiz_id: int
     answers: List[QuizAnswer]
 
 
@@ -121,6 +121,4 @@ class MyMembershipResponse(BaseModel):
 
 
 class WeekCompleteRequest(BaseModel):
-    week_number: int = Field(ge=1, le=52)
-    quiz_score: int = Field(ge=0)
-    quiz_total: int = Field(ge=1)
+    quiz_id: int

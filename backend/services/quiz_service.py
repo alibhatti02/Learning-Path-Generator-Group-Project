@@ -1,9 +1,8 @@
 import json
 import os
-
 import requests
-
 from services.ai_service import azure_chat_json
+from services.database import get_db
 
 # Local Ollama handles quizzes by default (free, low latency); Azure OpenAI is the
 # automatic fallback when Ollama is unreachable — e.g. on an Azure deployment with no local model.
@@ -53,8 +52,12 @@ def _call_llm(system_prompt: str, user_prompt: str) -> dict:
             )
 
 
-def generate_quiz(milestone: str, week_number: int) -> dict:
-    """Generates 3 multiple-choice + 2 open-ended questions for a weekly milestone."""
+def generate_quiz(user_id: int, milestone: str, week_number: int, group_id: int | None = None) -> dict:
+    """
+    Generates 3 multiple-choice + 2 open-ended questions for a weekly milestone,
+    persists them (answers included) as a quiz_attempts row, and returns the
+    questions with correct answers stripped out so they never reach the client.
+    """
     system_prompt = (
         "You are a quiz author for a technical learning platform. "
         "Respond ONLY with a valid JSON object, no markdown fences, matching exactly:\n"
@@ -83,14 +86,29 @@ def generate_quiz(milestone: str, week_number: int) -> dict:
     for i, q in enumerate(questions, start=1):
         q["question_number"] = i
 
-    return {"week_number": week_number, "milestone": milestone, "questions": questions}
+    # Stripping and persist
+    quiz_id = create_attempt(user_id, milestone, week_number, group_id, questions)
+    public = [{k: v for k, v in q.items() if k != "correct_answer"} for q in questions]
+    return {"quiz_id": quiz_id, "week_number": week_number, "milestone": milestone, "questions": public}
 
 
-def grade_quiz(week_number: int, milestone: str, questions: list[dict], answers: list[dict]) -> dict:
+def grade_quiz(user_id: int, quiz_id: int, answers: list[dict]) -> dict:
     """
-    Grades MCQs deterministically against the stored correct_answer;
-    open-ended answers are graded by the LLM with per-question feedback.
+    Grades a stored quiz attempt. Loads the questions (with answers) the server
+    saved at generation time — the client never supplies them — then grades MCQs
+    deterministically and open-ended answers via the LLM. Locks the attempt after
+    the first successful grade so scores can't be re-fished.
     """
+    attempt = get_attempt(user_id, quiz_id)
+    if attempt is None:
+        raise ValueError("Quiz not found.")
+    if attempt["status"] == "graded":
+        raise ValueError("This quiz has already been submitted.")
+
+    milestone = attempt["milestone"]
+    week_number = attempt["week_number"]
+    questions = json.loads(attempt["questions_json"])
+
     answer_map = {a["question_number"]: a.get("answer", "") for a in answers}
     feedback: list[dict] = []
     open_ended: list[dict] = []
@@ -125,7 +143,12 @@ def grade_quiz(week_number: int, milestone: str, questions: list[dict], answers:
     total = len(questions)
     passed = total > 0 and (score / total) >= PASS_THRESHOLD
 
+    # Persist the score and lock the attempt only after grading fully succeeds —
+    # if the open-ended LLM call raised above, the attempt stays 'pending' and retryable.
+    _mark_graded(quiz_id, score, total)
+
     return {
+        "quiz_id": quiz_id,
         "week_number": week_number,
         "score": score,
         "total": total,
@@ -173,3 +196,34 @@ def _overall_feedback(score: int, total: int, passed: bool) -> str:
     if passed:
         return "Solid work — you passed this milestone. Review the missed questions before moving on."
     return "You haven't quite got this milestone yet. Revisit this week's resources and try again."
+
+
+def create_attempt(user_id, milestone, week_number, group_id, questions) -> int:
+    """Stores a freshly generated quiz (answers included) and returns its id."""
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO quiz_attempts (user_id, group_id, milestone, week_number, questions_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_id, group_id, milestone, week_number, json.dumps(questions)),
+        )
+        return cur.lastrowid
+
+
+def get_attempt(user_id, quiz_id) -> dict | None:
+    """Loads an attempt scoped to its owner — user_id in the WHERE clause blocks
+    reading anyone else's quiz. Returns None if it doesn't exist or isn't theirs."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM quiz_attempts WHERE id = ? AND user_id = ?", (quiz_id, user_id)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _mark_graded(quiz_id, score, total) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE quiz_attempts SET score = ?, total = ?, status = 'graded' WHERE id = ?",
+            (score, total, quiz_id),
+        )

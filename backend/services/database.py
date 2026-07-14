@@ -118,3 +118,26 @@ def init_db() -> None:
             )
             """
         )
+
+        # One row per quiz the user generates. questions_json holds the full questions
+        # WITH their correct answers and is NEVER sent to the client — grading loads it
+        # here server-side. group_id is set for group quizzes, null for standalone ones.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS quiz_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+                milestone TEXT NOT NULL,
+                week_number INTEGER NOT NULL,
+                questions_json TEXT NOT NULL,
+                score INTEGER,
+                total INTEGER,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+
+
+

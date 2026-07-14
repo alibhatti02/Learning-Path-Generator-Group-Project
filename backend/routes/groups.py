@@ -62,7 +62,7 @@ def my_membership(group_id: int, user: dict = Depends(get_current_user)) -> dict
 def complete(group_id: int, request: WeekCompleteRequest, user: dict = Depends(get_current_user)) -> dict:
     try:
         return complete_week(
-            user["id"], group_id, request.week_number, request.quiz_score, request.quiz_total
+            user["id"], group_id, request.quiz_id
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -1,0 +1,24 @@
+# backend/.dockerignore
+# Virtualenvs — huge and platform-specific; the image installs its own deps
+.venv/
+venv/
+
+# Python caches
+**/__pycache__/
+**/*.pyc
+
+
+# Local database — contains real user data, must never be in an image
+*.db
+
+# Secrets
+.env
+.env.*
+
+# Editor / OS cruft
+.idea/
+.DS_Store
+*.log
+
+# VCS (only relevant if your build context ever includes it)
+.git/

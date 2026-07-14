@@ -1,0 +1,19 @@
+# frontend/.dockerignore
+# Host modules break the image — it runs its own `npm install`
+node_modules/
+
+# Prior build output
+dist/
+dist-ssr/
+
+# Secrets / local env
+.env
+.env.*
+
+# Leftover Firebase deploy state
+.firebase/
+
+# OS / logs / VCS
+.DS_Store
+*.log
+.git/
