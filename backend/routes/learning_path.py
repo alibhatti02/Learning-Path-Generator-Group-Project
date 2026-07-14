@@ -1,10 +1,11 @@
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from services.ai_service import generate_learning_roadmap
 from services.auth_service import get_current_user
 from services.path_service import save_path
+from services.rate_limit import AI_ROADMAP_LIMIT, limiter, user_or_ip_key
 from services.resource_service import fetch_resources_for_query
 
 router = APIRouter(tags=["generation"])
@@ -18,16 +19,17 @@ class PathRequest(BaseModel):
     hours_per_day: int
 
 @router.post("/generate")
-def create_path(request: PathRequest, user: dict = Depends(get_current_user)):
+@limiter.limit(AI_ROADMAP_LIMIT, key_func=user_or_ip_key)
+def create_path(request: Request, payload: PathRequest, user: dict = Depends(get_current_user)):
     """
     Processes incoming configuration values, calls the dynamic timeline service,
     injects live resources, and returns structured object data.
     """
     # 1. Request base JSON roadmap object structure from Azure OpenAI
     roadmap_data = generate_learning_roadmap(
-        topic=request.topic,
-        hours_per_day=request.hours_per_day,
-        level=request.experience_level
+        topic=payload.topic,
+        hours_per_day=payload.hours_per_day,
+        level=payload.experience_level
     )
 
     # 2. Immediately intercept service-level failures
@@ -58,9 +60,9 @@ def create_path(request: PathRequest, user: dict = Depends(get_current_user)):
     # 4. Persist the finished roadmap as a session so it shows up in the user's history
     roadmap_data["path_id"] = save_path(
         user_id=user["id"],
-        topic=request.topic,
-        experience_level=request.experience_level,
-        hours_per_day=request.hours_per_day,
+        topic=payload.topic,
+        experience_level=payload.experience_level,
+        hours_per_day=payload.hours_per_day,
         roadmap=roadmap_data,
     )
 

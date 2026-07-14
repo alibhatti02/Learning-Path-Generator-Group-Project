@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from models.schemas import (
     GroupCreateRequest,
@@ -7,6 +7,7 @@ from models.schemas import (
     WeekCompleteRequest,
 )
 from services.auth_service import get_current_user
+from services.rate_limit import AI_ROADMAP_LIMIT, limiter, user_or_ip_key
 from services.group_service import (
     complete_week,
     create_group,
@@ -41,10 +42,11 @@ def join(request: GroupJoinRequest, user: dict = Depends(get_current_user)) -> d
 
 
 @router.post("/{group_id}/hours")
-def set_my_hours(group_id: int, request: SetHoursRequest, user: dict = Depends(get_current_user)) -> dict:
+@limiter.limit(AI_ROADMAP_LIMIT, key_func=user_or_ip_key)
+def set_my_hours(group_id: int, request: Request, payload: SetHoursRequest, user: dict = Depends(get_current_user)) -> dict:
     """Private endpoint — sets MY hours and generates MY roadmap. No other member ever sees this call happen."""
     try:
-        return set_hours(user["id"], group_id, request.hourly_commitment)
+        return set_hours(user["id"], group_id, payload.hourly_commitment)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

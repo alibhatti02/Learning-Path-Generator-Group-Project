@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from models.schemas import AuthRequest, AuthResponse
 from services.auth_service import (
@@ -7,14 +7,16 @@ from services.auth_service import (
     get_current_user,
     register_user,
 )
+from services.rate_limit import AUTH_LOGIN_LIMIT, AUTH_REGISTER_LIMIT, limiter
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/register", response_model=AuthResponse, status_code=201)
-def register(request: AuthRequest) -> AuthResponse:
+@limiter.limit(AUTH_REGISTER_LIMIT)
+def register(request: Request, payload: AuthRequest) -> AuthResponse:
     try:
-        user = register_user(request.email, request.password)
+        user = register_user(payload.email, payload.password)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
 
@@ -25,8 +27,9 @@ def register(request: AuthRequest) -> AuthResponse:
 
 
 @router.post("/login", response_model=AuthResponse)
-def login(request: AuthRequest) -> AuthResponse:
-    user = authenticate_user(request.email, request.password)
+@limiter.limit(AUTH_LOGIN_LIMIT)
+def login(request: Request, payload: AuthRequest) -> AuthResponse:
+    user = authenticate_user(payload.email, payload.password)
     # Same message for wrong email vs wrong password — don't leak which accounts exist
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid email or password.")

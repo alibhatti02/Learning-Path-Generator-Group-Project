@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 from services.auth_service import get_current_user
+from services.rate_limit import AI_RESUME_LIMIT, limiter, user_or_ip_key
 from services.resume_service import analyze_resume
 
 router = APIRouter(prefix="/resume", tags=["resume"])
@@ -9,7 +10,8 @@ MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # resumes have no business being bigger than
 
 
 @router.post("/analyze")
-async def analyze(file: UploadFile = File(...), user: dict = Depends(get_current_user)) -> dict:
+@limiter.limit(AI_RESUME_LIMIT, key_func=user_or_ip_key)
+async def analyze(request: Request, file: UploadFile = File(...), user: dict = Depends(get_current_user)) -> dict:
     content = await file.read()
 
     if len(content) > MAX_UPLOAD_BYTES:
