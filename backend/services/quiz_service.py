@@ -1,8 +1,10 @@
 import json
 import os
 import requests
+from sqlalchemy import text
+
 from services.ai_service import azure_chat_json
-from services.database import get_db
+from services.database import get_db, quiz_attempts
 
 # Local Ollama handles quizzes by default (free, low latency); Azure OpenAI is the
 # automatic fallback when Ollama is unreachable — e.g. on an Azure deployment with no local model.
@@ -201,14 +203,16 @@ def _overall_feedback(score: int, total: int, passed: bool) -> str:
 def create_attempt(user_id, milestone, week_number, group_id, questions) -> int:
     """Stores a freshly generated quiz (answers included) and returns its id."""
     with get_db() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO quiz_attempts (user_id, group_id, milestone, week_number, questions_json)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (user_id, group_id, milestone, week_number, json.dumps(questions)),
+        result = conn.execute(
+            quiz_attempts.insert().values(
+                user_id=user_id,
+                group_id=group_id,
+                milestone=milestone,
+                week_number=week_number,
+                questions_json=json.dumps(questions),
+            )
         )
-        return cur.lastrowid
+        return result.inserted_primary_key[0]
 
 
 def get_attempt(user_id, quiz_id) -> dict | None:
@@ -216,14 +220,15 @@ def get_attempt(user_id, quiz_id) -> dict | None:
     reading anyone else's quiz. Returns None if it doesn't exist or isn't theirs."""
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM quiz_attempts WHERE id = ? AND user_id = ?", (quiz_id, user_id)
-        ).fetchone()
+            text("SELECT * FROM quiz_attempts WHERE id = :id AND user_id = :user_id"),
+            {"id": quiz_id, "user_id": user_id},
+        ).mappings().first()
     return dict(row) if row else None
 
 
 def _mark_graded(quiz_id, score, total) -> None:
     with get_db() as conn:
         conn.execute(
-            "UPDATE quiz_attempts SET score = ?, total = ?, status = 'graded' WHERE id = ?",
-            (score, total, quiz_id),
+            text("UPDATE quiz_attempts SET score = :score, total = :total, status = 'graded' WHERE id = :id"),
+            {"score": score, "total": total, "id": quiz_id},
         )

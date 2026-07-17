@@ -1,6 +1,5 @@
 import os
 import secrets
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -8,8 +7,10 @@ import bcrypt
 import jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
-from services.database import get_db
+from services.database import get_db, users
 
 # If JWT_SECRET isn't set we fall back to a random per-boot secret: still secure,
 # but every restart logs everyone out — set it in .env for real deployments.
@@ -44,24 +45,24 @@ def create_access_token(user_id: int, email: str) -> str:
 
 def register_user(email: str, password: str) -> dict:
     """Creates a user row. Raises ValueError if the email is already taken."""
+    normalized = email.strip().lower()
     with get_db() as conn:
         try:
-            cursor = conn.execute(
-                "INSERT INTO users (email, password_hash) VALUES (?, ?)",
-                (email.strip().lower(), hash_password(password)),
+            result = conn.execute(
+                users.insert().values(email=normalized, password_hash=hash_password(password))
             )
-        except sqlite3.IntegrityError:
+        except IntegrityError:
             raise ValueError("An account with this email already exists.")
-        return {"id": cursor.lastrowid, "email": email.strip().lower()}
+        return {"id": result.inserted_primary_key[0], "email": normalized}
 
 
 def authenticate_user(email: str, password: str) -> Optional[dict]:
     """Returns the user on valid credentials, None otherwise (caller decides the error message)."""
     with get_db() as conn:
         row = conn.execute(
-            "SELECT id, email, password_hash FROM users WHERE email = ?",
-            (email.strip().lower(),),
-        ).fetchone()
+            text("SELECT id, email, password_hash FROM users WHERE email = :email"),
+            {"email": email.strip().lower()},
+        ).mappings().first()
 
     if row is None or not verify_password(password, row["password_hash"]):
         return None

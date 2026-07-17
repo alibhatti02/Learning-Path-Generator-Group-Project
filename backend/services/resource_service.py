@@ -1,11 +1,13 @@
 import json
 import os
 import urllib.parse
+from datetime import datetime, timedelta
 
 import requests
 from dotenv import load_dotenv
+from sqlalchemy import select, text
 
-from services.database import get_db
+from services.database import get_db, youtube_cache
 
 # Ensure environment variables are freshly accessible
 load_dotenv()
@@ -21,22 +23,37 @@ CACHE_TTL_DAYS = int(os.getenv("YOUTUBE_CACHE_TTL_DAYS", "30"))
 
 def _cache_get(query: str, ignore_ttl: bool = False) -> list[dict] | None:
     with get_db() as conn:
+        # Read via typed Core columns so cached_at comes back as a real datetime on
+        # both SQLite and Azure SQL (raw text() SQL returns a bare string on SQLite).
         row = conn.execute(
-            "SELECT results_json, cached_at >= datetime('now', ?) AS fresh FROM youtube_cache WHERE query = ?",
-            (f"-{CACHE_TTL_DAYS} days", query),
-        ).fetchone()
-    if row is None or not (row["fresh"] or ignore_ttl):
+            select(youtube_cache.c.results_json, youtube_cache.c.cached_at).where(
+                youtube_cache.c.query == query
+            )
+        ).mappings().first()
+    if row is None:
+        return None
+    # Freshness computed in Python (portable) rather than a dialect-specific date expression
+    fresh = row["cached_at"] >= datetime.utcnow() - timedelta(days=CACHE_TTL_DAYS)
+    if not (fresh or ignore_ttl):
         return None
     return json.loads(row["results_json"])
 
 
 def _cache_put(query: str, results: list[dict]) -> None:
+    # Portable upsert: update first, insert only if nothing was updated
     with get_db() as conn:
-        conn.execute(
-            "INSERT INTO youtube_cache (query, results_json, cached_at) VALUES (?, ?, datetime('now')) "
-            "ON CONFLICT(query) DO UPDATE SET results_json = excluded.results_json, cached_at = excluded.cached_at",
-            (query, json.dumps(results)),
+        result = conn.execute(
+            text(
+                "UPDATE youtube_cache SET results_json = :rj, cached_at = :now WHERE query = :query"
+            ),
+            {"rj": json.dumps(results), "now": datetime.utcnow(), "query": query},
         )
+        if result.rowcount == 0:
+            conn.execute(
+                youtube_cache.insert().values(
+                    query=query, results_json=json.dumps(results), cached_at=datetime.utcnow()
+                )
+            )
 
 
 def _search_fallback(query: str) -> list[dict]:

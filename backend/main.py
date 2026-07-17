@@ -11,6 +11,7 @@ from routes.quiz import router as quiz_router
 from routes.resume import router as resume_router
 from routes.paths import router as paths_router
 from routes.groups import router as groups_router
+from routes.health import router as health_router
 from services.database import init_db
 
 # Load .env before anything reads the environment — don't rely on
@@ -64,6 +65,7 @@ app.include_router(quiz_router, prefix="/api")
 app.include_router(resume_router, prefix="/api")
 app.include_router(paths_router, prefix="/api")
 app.include_router(groups_router, prefix="/api")
+app.include_router(health_router, prefix="/api")
 
 # Define a baseline GET endpoint at the absolute root URL to handle simple connectivity health checks.
 @app.get("/")

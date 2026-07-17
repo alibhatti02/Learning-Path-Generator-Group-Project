@@ -1,143 +1,169 @@
 import os
-import sqlite3
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Iterator
 
-# Store the SQLite file next to main.py; override with DATABASE_PATH for deployments (e.g. Azure mounted volume)
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Unicode,
+    UnicodeText,
+    UniqueConstraint,
+    create_engine,
+    event,
+)
+from sqlalchemy.dialects import mssql
+from sqlalchemy.engine import Connection
+
+# Unbounded unicode text. Plain UnicodeText renders as the DEPRECATED NTEXT on
+# SQL Server, so map it to NVARCHAR(MAX) there; stays TEXT on SQLite.
+BIG_TEXT = UnicodeText().with_variant(mssql.NVARCHAR(None), "mssql")
+
+# ---------------------------------------------------------------------------
+# Engine — driven entirely by DATABASE_URL so the same code runs on SQLite
+# locally and Azure SQL in production.
+#
+#   Local (default):  sqlite:///<backend>/courseforge.db
+#   Azure SQL:        mssql+pyodbc://<user>:<pass>@<server>.database.windows.net:1433/
+#                       <db>?driver=ODBC+Driver+18+for+SQL+Server&Encrypt=yes&TrustServerCertificate=no
+#
+# pool_pre_ping recovers connections Azure silently drops after idle periods.
+# ---------------------------------------------------------------------------
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = os.getenv("DATABASE_PATH", os.path.join(_BACKEND_DIR, "courseforge.db"))
+_DEFAULT_SQLITE = f"sqlite:///{os.path.join(_BACKEND_DIR, 'courseforge.db')}"
+DATABASE_URL = os.getenv("DATABASE_URL", _DEFAULT_SQLITE)
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
+
+
+# SQLite disables foreign-key enforcement per-connection, so ON DELETE CASCADE
+# would silently do nothing without this. Azure SQL enforces FKs natively, so
+# this hook is scoped to the SQLite dialect only.
+if engine.dialect.name == "sqlite":
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_fks(dbapi_conn, _record):
+        dbapi_conn.execute("PRAGMA foreign_keys=ON")
+
+
+metadata = MetaData()
+
+# Column type choices:
+#   Unicode / UnicodeText  -> NVARCHAR on SQL Server: any column holding raw user
+#     or AI text (names, topics, milestones, search queries, JSON payloads) so
+#     emoji and non-Latin characters survive. VARCHAR would corrupt them.
+#   String                 -> VARCHAR: machine/ASCII-only values (bcrypt hash,
+#     hex invite code, enum-ish status/level). Cheaper, and never non-ASCII.
+# Index/PK/UNIQUE string columns must be length-bounded (SQL Server caps key size;
+# NVARCHAR keys cap at 450 chars).
+
+users = Table(
+    "users", metadata,
+    Column("id", Integer, primary_key=True),
+    Column("email", Unicode(254), nullable=False, unique=True),
+    Column("password_hash", String(255), nullable=False),
+    Column("created_at", DateTime, default=datetime.utcnow, nullable=False),
+)
+
+# Saved roadmap sessions — one row per generated path, newest first in the UI
+learning_paths = Table(
+    "learning_paths", metadata,
+    Column("id", Integer, primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("title", Unicode(300), nullable=False),
+    Column("topic", Unicode(300), nullable=False),
+    Column("experience_level", String(50), nullable=False),
+    Column("hours_per_day", Integer, nullable=False),
+    Column("roadmap_json", BIG_TEXT, nullable=False),
+    Column("created_at", DateTime, default=datetime.utcnow, nullable=False),
+)
+
+# YouTube search cache — repeated queries cost 0 quota units instead of 100
+youtube_cache = Table(
+    "youtube_cache", metadata,
+    Column("query", Unicode(450), primary_key=True),
+    Column("results_json", BIG_TEXT, nullable=False),
+    Column("cached_at", DateTime, default=datetime.utcnow, nullable=False),
+)
+
+# A group is a shared topic up to 6 people compete on. invite_code is how others join.
+groups = Table(
+    "groups", metadata,
+    Column("id", Integer, primary_key=True),
+    Column("name", Unicode(100), nullable=False),
+    Column("skill_topic", Unicode(200), nullable=False),
+    Column("experience_level", String(50), nullable=False, default="beginner"),
+    Column("invite_code", String(32), nullable=False, unique=True),
+    Column("created_by", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("max_members", Integer, nullable=False, default=6),
+    Column("status", String(20), nullable=False, default="active"),
+    Column("created_at", DateTime, default=datetime.utcnow, nullable=False),
+)
+
+# One row per (group, user). hourly_commitment / calculated_weeks / roadmap_json are
+# PRIVATE fields — group_service.py must never let these leave the owning user's own request.
+group_members = Table(
+    "group_members", metadata,
+    Column("id", Integer, primary_key=True),
+    Column("group_id", Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("hourly_commitment", Float),
+    Column("calculated_weeks", Integer),
+    Column("roadmap_json", BIG_TEXT),
+    Column("current_week", Integer, nullable=False, default=0),
+    Column("total_points", Integer, nullable=False, default=0),
+    Column("status", String(20), nullable=False, default="pending_hours"),
+    Column("completed_at", DateTime),
+    Column("joined_at", DateTime, default=datetime.utcnow, nullable=False),
+    UniqueConstraint("group_id", "user_id", name="uq_group_member"),
+)
+
+# One row per member per week — backs both the leaderboard and each member's own pace view.
+group_progress = Table(
+    "group_progress", metadata,
+    Column("id", Integer, primary_key=True),
+    Column("group_id", Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("week_number", Integer, nullable=False),
+    Column("quiz_score", Integer),
+    Column("quiz_total", Integer),
+    Column("points_earned", Integer, nullable=False, default=0),
+    Column("completed_at", DateTime, default=datetime.utcnow, nullable=False),
+    UniqueConstraint("group_id", "user_id", "week_number", name="uq_group_week"),
+)
+
+# One row per quiz the user generates. questions_json holds the full questions WITH
+# their correct answers and is NEVER sent to the client — grading loads it here
+# server-side. group_id is set for group quizzes, null for standalone ones.
+quiz_attempts = Table(
+    "quiz_attempts", metadata,
+    Column("id", Integer, primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("group_id", Integer, ForeignKey("groups.id", ondelete="CASCADE")),
+    Column("milestone", Unicode(300), nullable=False),
+    Column("week_number", Integer, nullable=False),
+    Column("questions_json", BIG_TEXT, nullable=False),
+    Column("score", Integer),
+    Column("total", Integer),
+    Column("status", String(20), nullable=False, default="pending"),
+    Column("created_at", DateTime, default=datetime.utcnow, nullable=False),
+)
 
 
 @contextmanager
-def get_db() -> Iterator[sqlite3.Connection]:
-    """Yields a connection that commits on success and always closes."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    # SQLite has FK enforcement OFF by default per-connection — without this, every
-    # "ON DELETE CASCADE" in the schema below is silently a no-op and deletes leave orphans.
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
+def get_db() -> Iterator[Connection]:
+    """Yields a connection inside a transaction that commits on success,
+    rolls back on error, and always closes — same contract as before."""
+    with engine.begin() as conn:
         yield conn
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def init_db() -> None:
-    """Creates all tables on first boot. Passwords are only ever stored as bcrypt hashes."""
-    with get_db() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                password_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-            """
-        )
-        # Saved roadmap sessions — one row per generated path, newest first in the UI
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS learning_paths (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                title TEXT NOT NULL,
-                topic TEXT NOT NULL,
-                experience_level TEXT NOT NULL,
-                hours_per_day INTEGER NOT NULL,
-                roadmap_json TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-            """
-        )
-        # YouTube search cache — repeated queries cost 0 quota units instead of 100
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS youtube_cache (
-                query TEXT PRIMARY KEY,
-                results_json TEXT NOT NULL,
-                cached_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-            """
-        )
-
-        # ===================== Group Skills feature =====================
-
-        # A group is a shared topic up to 6 people compete on. invite_code is how others join.
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS groups (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                skill_topic TEXT NOT NULL,
-                experience_level TEXT NOT NULL DEFAULT 'beginner',
-                invite_code TEXT NOT NULL UNIQUE,
-                created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                max_members INTEGER NOT NULL DEFAULT 6,
-                status TEXT NOT NULL DEFAULT 'active',
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-            """
-        )
-
-        # One row per (group, user). hourly_commitment / calculated_weeks / roadmap_json are
-        # PRIVATE fields — group_service.py must never let these leave the owning user's own request.
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS group_members (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                hourly_commitment REAL,
-                calculated_weeks INTEGER,
-                roadmap_json TEXT,
-                current_week INTEGER NOT NULL DEFAULT 0,
-                total_points INTEGER NOT NULL DEFAULT 0,
-                status TEXT NOT NULL DEFAULT 'pending_hours',
-                completed_at TEXT,
-                joined_at TEXT NOT NULL DEFAULT (datetime('now')),
-                UNIQUE (group_id, user_id)
-            )
-            """
-        )
-
-        # One row per member per week — backs both the leaderboard and each member's own pace view.
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS group_progress (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                week_number INTEGER NOT NULL,
-                quiz_score INTEGER,
-                quiz_total INTEGER,
-                points_earned INTEGER NOT NULL DEFAULT 0,
-                completed_at TEXT NOT NULL DEFAULT (datetime('now')),
-                UNIQUE (group_id, user_id, week_number)
-            )
-            """
-        )
-
-        # One row per quiz the user generates. questions_json holds the full questions
-        # WITH their correct answers and is NEVER sent to the client — grading loads it
-        # here server-side. group_id is set for group quizzes, null for standalone ones.
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS quiz_attempts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
-                milestone TEXT NOT NULL,
-                week_number INTEGER NOT NULL,
-                questions_json TEXT NOT NULL,
-                score INTEGER,
-                total INTEGER,
-                status TEXT NOT NULL DEFAULT 'pending',
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-            """
-        )
-
-
-
+    """Creates any missing tables. Portable across SQLite and Azure SQL —
+    SQLAlchemy emits the right DDL (AUTOINCREMENT vs IDENTITY, etc.) per dialect."""
+    metadata.create_all(engine)
